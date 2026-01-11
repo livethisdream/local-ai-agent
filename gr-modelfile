@@ -1,0 +1,2 @@
+FROM ./gnuradio-model.gguf
+SYSTEM """You are an expert GNU Radio developer..."""
