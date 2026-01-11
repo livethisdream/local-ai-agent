@@ -14,7 +14,7 @@ COLLECTION_NAME = "gnuradio_knowledge"
 MODEL_NAME = "gnuradio-coder"
 SESSIONS_DIR = "chat_sessions"
 
-st.set_page_config(page_title="GNU Radio RAG", layout="wide")
+st.set_page_config(page_title="GNURadio Agent", layout="wide")
 
 # Ensure sessions directory exists
 os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -132,6 +132,11 @@ messages = load_session(active_id)
 
 st.header(f"💬 {sessions[active_id]['title']}")
 
+# Add a RAG Toggle to the Sidebar
+with st.sidebar:
+    st.divider()
+    use_rag = st.checkbox("🔍 Enable RAG (Search Docs)", value=True)
+
 # Display History
 for msg in messages:
     with st.chat_message(msg["role"]):
@@ -143,36 +148,50 @@ if user_input := st.chat_input("Ask about code or datasheets..."):
     messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
-    save_session(active_id, messages)  # Save immediately
+    save_session(active_id, messages)
 
-    # RAG Retrieval
-    with st.spinner("🔍 Checking docs..."):
-        query_vec = embedder.encode([user_input]).tolist()
-        results = collection.query(query_embeddings=query_vec, n_results=3)
+    # Context Variables
+    context_text = ""
+    sources = set()
 
-        context_text = ""
-        sources = set()
-        if results['documents']:
-            for i, doc in enumerate(results['documents'][0]):
-                meta = results['metadatas'][0][i]
-                src_name = os.path.basename(meta['source'])
-                context_text += f"-- SOURCE: {src_name} --\n{doc}\n\n"
-                sources.add(src_name)
+    # RAG LOGIC (Only runs if Toggle is ON)
+    if use_rag:
+        with st.spinner("🔍 Checking docs..."):
+            query_vec = embedder.encode([user_input]).tolist()
+            # We added a 'distance' check here to filter bad matches
+            results = collection.query(query_embeddings=query_vec, n_results=3)
+
+            if results['documents']:
+                for i, doc in enumerate(results['documents'][0]):
+                    # Chroma returns distance (lower is better).
+                    # A distance > 1.5 usually means "I found nothing relevant, just noise."
+                    # You can uncomment this if you want strict filtering:
+                    # if results['distances'][0][i] > 1.5: continue
+
+                    meta = results['metadatas'][0][i]
+                    src_name = os.path.basename(meta['source'])
+                    context_text += f"-- SOURCE: {src_name} --\n{doc}\n\n"
+                    sources.add(src_name)
 
     # Generation
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
 
-        rag_prompt = f"""
-        You are an expert developer. Answer based ONLY on the Context provided.
-        CONTEXT: {context_text}
-        USER QUESTION: {user_input}
-        """
+        # DYNAMIC PROMPT: Changes based on whether RAG was used
+        if context_text:
+            system_instruction = (
+                "You are an expert developer. Use the provided Context to answer. "
+                "If the context is irrelevant, ignore it and use your own knowledge."
+            )
+            final_prompt = f"{system_instruction}\n\nCONTEXT:\n{context_text}\n\nQUESTION:\n{user_input}"
+        else:
+            # Fallback to standard chat if RAG is off or found nothing
+            final_prompt = user_input
 
         stream = ollama.chat(
             model=MODEL_NAME,
-            messages=[{'role': 'user', 'content': rag_prompt}],
+            messages=[{'role': 'user', 'content': final_prompt}],
             stream=True
         )
 
@@ -190,6 +209,5 @@ if user_input := st.chat_input("Ask about code or datasheets..."):
     messages.append({"role": "assistant", "content": full_response})
     save_session(active_id, messages)
 
-    # Rerun to update the sidebar title (if this was the first message)
     if len(messages) == 2:
         st.rerun()

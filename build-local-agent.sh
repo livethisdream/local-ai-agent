@@ -2,24 +2,26 @@
 set -e  # Exit immediately if a command exits with a non-zero status.
 
 # --- CONFIGURATION ---
+CLEANUP=false                        # Set to 'true' to delete heavy temp files after success
 VENV_NAME="ai-env"
-MODEL_NAME="custom-coder" # Renamed to be generic
-GGUF_NAME="custom-model.gguf"
+MODEL_NAME="custom-coder"           # Name for Ollama
+GGUF_NAME="custom-model.gguf"       # Name of the final file on disk
 CHECKPOINT_DIR="outputs"
 REPO_TO_TRAIN_ON="/home/nrogers/src/gnuradio" # CHANGE THIS to your target folder
 BASE_MODEL="deepseek-ai/deepseek-coder-6.7b-instruct"
-DATASET_FILE="training_data.jsonl" # Centralized filename variable
+DATASET_FILE="training_data.jsonl"  # Centralized filename variable
 
 echo "======================================================"
 echo "🚀 STARTING GENERIC AI BUILD PIPELINE"
-echo "   Target: $REPO_TO_TRAIN_ON"
-echo "   Base:   $BASE_MODEL"
+echo "   Target:  $REPO_TO_TRAIN_ON"
+echo "   Base:    $BASE_MODEL"
+echo "   Cleanup: $CLEANUP"
 echo "======================================================"
 
 # ==============================================================================
 # PHASE 1: ENVIRONMENT SETUP
 # ==============================================================================
-echo "🔧 [1/6] Setting up System & Python Environment..."
+echo "🔧 [1/7] Setting up System & Python Environment..."
 
 sudo apt-get update
 sudo apt-get install -y python3-venv python3-dev build-essential git wget cmake ccache
@@ -46,10 +48,9 @@ fi
 # ==============================================================================
 # PHASE 2: GENERATE PYTHON SCRIPTS
 # ==============================================================================
-echo "📝 [2/6] Writing Python automation scripts..."
+echo "📝 [2/7] Writing Python automation scripts..."
 
 # --- Script 1: The Scraper ---
-# NOTICE: We use EOF (no quotes) so bash variables expand.
 cat << EOF > sdk_scraper.py
 import os, glob, json
 import pdfplumber
@@ -60,7 +61,6 @@ REPO_DIR = "$REPO_TO_TRAIN_ON"
 # (Mock scraper logic - replace with your real recursive scraper!)
 if not os.path.exists(DATA_FILE):
     print(f"⚠️ No dataset found. Creating a sample dataset from {REPO_DIR}...")
-    # In a real scenario, you would walk REPO_DIR here.
     sample_data = [
         {
             "instruction": "How do I create a hello world program?",
@@ -176,20 +176,19 @@ EOF
 # PHASE 3: EXECUTION LOOP
 # ==============================================================================
 
-echo "🕷️ [3/6] running Scraper..."
+echo "🕷️ [3/7] running Scraper..."
 python3 sdk_scraper.py
 
-echo "🏋️ [4/6] Running Training..."
+echo "🏋️ [4/7] Running Training..."
 if [ -d "$CHECKPOINT_DIR" ] && [ "$(ls -A $CHECKPOINT_DIR)" ]; then
     echo "   (Outputs exist, continuing...)"
 fi
-# Fixed filename here:
 python3 train_on_data.py
 
 # ==============================================================================
 # PHASE 4: COMPILATION (LLAMA.CPP)
 # ==============================================================================
-echo "🔨 [5/6] Building Converter Tools..."
+echo "🔨 [5/7] Building Converter Tools..."
 
 LLAMA_DIR="sdk-scraper/llama.cpp" # Note: This dir name depends on where unsloth clones it
 if [ -d "$LLAMA_DIR" ]; then
@@ -203,8 +202,6 @@ fi
 echo "💾 Running Export..."
 python3 finish_export.py
 
-# Smart Move: Find whatever GGUF was just created (ignoring the base model cache if present)
-# We look for the file containing "model_sdk" since that's what we named it in finish_export.py
 echo "🔄 Renaming output..."
 FOUND_GGUF=$(find . -maxdepth 2 -type f -name "*model_sdk*.gguf" | head -n 1)
 
@@ -214,12 +211,13 @@ if [ -f "$FOUND_GGUF" ]; then
 else
     echo "⚠️  Could not find generated GGUF. Check directory listing:"
     ls -lh *.gguf
+    exit 1 # Exit if we failed to create the model, so we don't clean up erroneously
 fi
 
 # ==============================================================================
 # PHASE 5: OLLAMA DEPLOYMENT
 # ==============================================================================
-echo "🐳 [6/6] Deploying to Ollama..."
+echo "🐳 [6/7] Deploying to Ollama..."
 
 cat << EOF > Modelfile
 FROM ./$GGUF_NAME
@@ -227,6 +225,34 @@ SYSTEM """You are an expert developer trained on $REPO_TO_TRAIN_ON."""
 EOF
 
 ollama create $MODEL_NAME -f Modelfile
+
+# ==============================================================================
+# PHASE 6: SMART CLEANUP
+# ==============================================================================
+if [ "$CLEANUP" = true ]; then
+    echo "🧹 [7/7] cleanup triggered..."
+
+    # 1. The Heavy Weights (HuggingFace Cache)
+    # WARNING: This deletes downloaded models. Only do this if you have the GGUF.
+    if [ -d "$HOME/.cache/huggingface/hub" ]; then
+        echo "   - Cleaning HuggingFace Cache (~15GB)..."
+        rm -rf "$HOME/.cache/huggingface/hub"
+    fi
+
+    # 2. The Temporary Checkpoints (The intermediate training steps)
+    if [ -d "outputs" ]; then
+        echo "   - Cleaning Training Checkpoints (~2GB)..."
+        rm -rf outputs
+    fi
+
+    # 3. The Unsloth/Llama Source (Optional, keeping the venv)
+    # echo "   - Cleaning Source Repos..."
+    # rm -rf sdk-scraper
+
+    echo "✨ Cleanup Complete. Disk space reclaimed."
+else
+    echo "🛑 [7/7] Cleanup SKIPPED. Temporary files preserved."
+fi
 
 echo "======================================================"
 echo "✅ SUCCESS! Agent '$MODEL_NAME' is ready."
