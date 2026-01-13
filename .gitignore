@@ -9,4 +9,4 @@
 *.json
 *rag_db/
 *rag_sessions/
-*.idea/
+.idea/
