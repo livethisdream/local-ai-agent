@@ -1,0 +1,11 @@
+.ai-env/
+*llama.cpp/
+*model_gnuradio/
+*unsloth_compiled_cache/
+*chat_sessions/
+*.gguf
+*.jsonl
+*.zip
+*.json
+*rag_db/
+*rag_sessions/
