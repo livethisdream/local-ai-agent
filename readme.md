@@ -1,5 +1,7 @@
 # 📚 Guide: Building a Local, Private SDK Expert
 
+My goal is to create an LLM that runs locally, so I can train it on local data without internet access. 
+
 This guide documents the process of scraping a local SDK (e.g., GNU Radio), fine-tuning a DeepSeek-Coder model on consumer hardware (WSL/NVIDIA GPU), and deploying it as a private chat agent. There are two ways to do this:
 
 1) Build a fine-tuned model using unsloth and possibly add a RAG pipeline. This is captured in the `unsloth/` folder. This is resource intensive and training takes hours.
